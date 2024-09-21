@@ -59,17 +59,19 @@ def fetch_repos(language, sort_by="stars", per_page=100, page=1):
             sleep_time = max(reset_time - time.time(), 0)
             print(f'rate limited, bro. sleeping it off for {sleep_time / 60:.2f} minutes')
             time.sleep(sleep_time + 5)
-        elif response.status_code == 200:
+            continue
+        
+        if response.status_code == 200:
             return response.json().get('items', [])
-        else:
-            print(f' error {response.status_code}: {response.text}')
-            retries -= 1
-            if retries > 0:
-                time.sleep(2)
-            else:
-                print('retry limit reached, likely error/issue')
-                return []
+        
+        print(f' error {response.status_code}: {response.text}')
+        retries -= 1
+        if retries > 0:
+            time.sleep(2)
+
+    print('retry limit reached, likely error/issue')
     return []
+
 
 
 # fetch contributors for a repo:
