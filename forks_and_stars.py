@@ -3,16 +3,17 @@ import time
 import sqlite3
 import csv
 from datetime import datetime
-from dotenv import load_dotenv
+import json 
 import os
-
 
 TIME_STAMP = datetime.now().strftime("%Y%m%d_%H%M")
 
 NUM_REPOS = 200
 NUM_CONTRIBUTORS = 5 
-GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
-HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"}
+with open('config.json') as f:
+    config = json.load(f)
+api_key = config['GITHUB_TOKEN']
+HEADERS = {"Authorization": f"token {api_key}"}
 LANGUAGES = ["java", "c#", "typescript", "javascript"]
 LOCAL_DB_FILE = 'new_github_repos.db'
 CSV_OUTPUT_FILE = f'{TIME_STAMP}_github_repos.csv'
@@ -57,7 +58,6 @@ def fetch_repos(language, sort_by="stars", per_page=100, page=1):
             sleep_time = reset_time - time.time()
             print(f'rate limited, bro. sleeping it off for {sleep_time / 60:.2f} minutes')
             time.sleep(sleep_time + 5)
-            continue
         elif response.status_code == 200:
             return response.json().get('items', [])
         else:
