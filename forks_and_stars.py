@@ -20,7 +20,6 @@ CSV_OUTPUT_FILE = f'{TIME_STAMP}_github_repos.csv'
 MAX_RETRIES = 5
 
 
-
 # create tables (if they don't exist)
 def create_tables(cursor):
     cursor.execute('''
@@ -52,26 +51,29 @@ def fetch_repos(language, sort_by="stars", per_page=100, page=1):
     url = f"https://api.github.com/search/repositories?q=stars:>1+language:{language}&sort={sort_by}&order=desc&per_page={per_page}&page={page}"
     
     while retries > 0:
-        response = requests.get(url, headers=HEADERS)
-        
-        if response.status_code == 403 and 'X-RateLimit-Reset' in response.headers:
-            reset_time = int(response.headers['X-RateLimit-Reset'])
-            sleep_time = max(reset_time - time.time(), 0)
-            print(f'rate limited, bro. sleeping it off for {sleep_time / 60:.2f} minutes')
-            time.sleep(sleep_time + 5)
-            continue
-        
-        if response.status_code == 200:
-            return response.json().get('items', [])
-        
-        print(f' error {response.status_code}: {response.text}')
+        try:
+            response = requests.get(url, headers=HEADERS)
+            
+            if response.status_code == 403 and 'X-RateLimit-Reset' in response.headers:
+                reset_time = int(response.headers['X-RateLimit-Reset'])
+                sleep_time = max(reset_time - time.time(), 0)
+                print(f'rate limited, bro. sleeping it off for {sleep_time / 60:.2f} minutes')
+                time.sleep(sleep_time + 5)
+                continue
+            
+            if response.status_code == 200:
+                return response.json().get('items', [])
+            
+            print(f' error {response.status_code}: {response.text}')
+        except requests.exceptions.RequestException as e:
+            print(f'request failure: {e}')
+            
         retries -= 1
         if retries > 0:
             time.sleep(2)
 
-    print('retry limit reached, likely error/issue')
+    print('repo retry limit reached, likely error/issue')
     return []
-
 
 
 # fetch contributors for a repo:
@@ -80,25 +82,40 @@ def fetch_contributors(owner, repo, limit):
     url = f"https://api.github.com/repos/{owner}/{repo}/contributors?per_page={limit}"
     rate_limit_retries = 0
     while retries > 0:
-        response = requests.get(url, headers=HEADERS)
-        retries -= 1
-        if response.status_code == 403 and 'X-RateLimit-Reset' in response.headers:
-            rate_limit_retries += 1
-            if rate_limit_retries > MAX_RETRIES:
-                print("Max rate limit retries reached. exiting.")
-                return []
-            reset_time = int(response.headers['X-RateLimit-Reset'])
-            sleep_time = max(reset_time - time.time(), 0)
-            print(f'  rate limited, bro. sleeping it off for {sleep_time / 60:.2f}  minutes')
-            time.sleep(sleep_time + 5)
-            continue
-        elif response.status_code == 200:
-            contributors = response.json()[:limit]
-            return contributors
-        else:
-            print(f'error: {response.status_code}: {response.text}')  
-            return []
-    return []      
+        try:            
+            response = requests.get(url, headers=HEADERS)
+            
+            if response.status_code == 403 and 'X-RateLimit-Reset' in response.headers:
+                rate_limit_retries += 1
+                if rate_limit_retries > MAX_RETRIES:
+                    print("max rate limit retries reached. exiting.")
+                    return []
+                reset_time = int(response.headers['X-RateLimit-Reset'])
+                sleep_time = max(reset_time - time.time(), 0)
+                print(f'  rate limited, bro. sleeping it off for {sleep_time / 60:.2f}  minutes')
+                time.sleep(sleep_time + 5)
+                continue
+            
+            if response.status_code == 200:
+                contributors = response.json()[:limit]
+                return contributors
+            
+            
+            print(f'error: {response.status_code}: {response.text}') 
+            retries -= 1
+            if retries > 0:
+                print(f"retrying... {retries} retries left") 
+                time.sleep(2)
+                
+        except requests.exceptions.RequestException as e:
+            print(f'request failure: {e}')
+            retries -= 1
+            if retries > 0:
+                print(f'retrying ...{retries} retries left')
+                time.sleep(2)
+
+    print("contributor retry limit reached")
+
 
 # insert repositories into db
 def insert_repo(cursor, repo_data):
