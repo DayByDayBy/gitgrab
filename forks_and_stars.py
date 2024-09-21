@@ -17,7 +17,8 @@ HEADERS = {"Authorization": f"token {api_key}"}
 LANGUAGES = ["java", "c#", "typescript", "javascript"]
 LOCAL_DB_FILE = 'new_github_repos.db'
 CSV_OUTPUT_FILE = f'{TIME_STAMP}_github_repos.csv'
-RETRIES = 5
+MAX_RETRIES = 5
+
 
 
 # create tables (if they don't exist)
@@ -47,7 +48,7 @@ def create_tables(cursor):
     
 # fetch repos:
 def fetch_repos(language, sort_by="stars", per_page=100, page=1):
-    retries = RETRIES
+    retries = MAX_RETRIES
     url = f"https://api.github.com/search/repositories?q=stars:>1+language:{language}&sort={sort_by}&order=desc&per_page={per_page}&page={page}"
     
     while retries > 0:
@@ -55,7 +56,7 @@ def fetch_repos(language, sort_by="stars", per_page=100, page=1):
         
         if response.status_code == 403 and 'X-RateLimit-Reset' in response.headers:
             reset_time = int(response.headers['X-RateLimit-Reset'])
-            sleep_time = reset_time - time.time()
+            sleep_time = max(reset_time - time.time(), 0)
             print(f'rate limited, bro. sleeping it off for {sleep_time / 60:.2f} minutes')
             time.sleep(sleep_time + 5)
         elif response.status_code == 200:
@@ -73,14 +74,19 @@ def fetch_repos(language, sort_by="stars", per_page=100, page=1):
 
 # fetch contributors for a repo:
 def fetch_contributors(owner, repo, limit):
-    retries = RETRIES
+    retries = MAX_RETRIES
     url = f"https://api.github.com/repos/{owner}/{repo}/contributors?per_page={limit}"
+    rate_limit_retries = 0
     while retries > 0:
         response = requests.get(url, headers=HEADERS)
         retries -= 1
         if response.status_code == 403 and 'X-RateLimit-Reset' in response.headers:
+            rate_limit_retries += 1
+            if rate_limit_retries > MAX_RETRIES:
+                print("Max rate limit retries reached. exiting.")
+                return []
             reset_time = int(response.headers['X-RateLimit-Reset'])
-            sleep_time = reset_time - time.time()
+            sleep_time = max(reset_time - time.time(), 0)
             print(f'  rate limited, bro. sleeping it off for {sleep_time / 60:.2f}  minutes')
             time.sleep(sleep_time + 5)
             continue
@@ -104,12 +110,12 @@ def insert_repo(cursor, repo_data):
     ))
 
 # send contributors into db
+
 def insert_contributors(cursor, repo_id, contributors):
-    for contributor in contributors:
-        cursor.execute('''
-            INSERT OR REPLACE INTO contributors (repo_id, contributor, contributions)
-            VALUES (?, ?, ?);
-        ''', (repo_id, contributor['login'], contributor['contributions']))
+    cursor.executemany('''
+        INSERT OR REPLACE INTO contributors (repo_id, contributor, contributions)
+        VALUES (?, ?, ?);
+    ''', [(repo_id, contributor['login'], contributor['contributions']) for contributor in contributors])
 
 
 # grabbing starred/forked repos:
@@ -133,9 +139,7 @@ def fetch_and_store_repos_by_criteria(cursor, language, sort_by, num_repos=NUM_R
             if contributors:
                 insert_contributors(cursor, repo['id'], contributors)
                 print(f"inserted contributors for: {repo['name']}")
-                 
-        # tiny delay (probably not necessary):
-        time.sleep(0.1)
+                
 
 def export_to_csv(cursor, filename):
     cursor.execute("SELECT * FROM repositories")
