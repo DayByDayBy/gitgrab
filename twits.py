@@ -1,13 +1,14 @@
 import tweepy
 import pandas as pd
+import json
 
-# need to sign up for a dev account, if those are still a thing with 'nu-twitter'
-API_KEY = 'api_key'
-API_SECRET_KEY = 'api_secret_key'
-ACCESS_TOKEN = 'access_token'
-ACCESS_TOKEN_SECRET = 'access_token_secret'
+with open('config.json') as f:
+    config = json.load(f)
+API_KEY =  config['API_KEY']
+API_SECRET_KEY = config['API_SECRET_KEY']
+ACCESS_TOKEN = config['ACCESS_TOKEN']
+ACCESS_TOKEN_SECRET = config['ACCESS_TOKEN_SECRET']
 
-# authenticate
 auth = tweepy.OAuthHandler(API_KEY, API_SECRET_KEY)
 auth.set_access_token(ACCESS_TOKEN, ACCESS_TOKEN_SECRET)
 api = tweepy.API(auth)
@@ -28,7 +29,7 @@ def search_users(keywords, num_users=100):
 
 def main():
     # define keywords based on programming languages/open-source/etc
-    keywords = ['Java', 'JavaScript', 'Typescript', 'C#', 'open source', 'developer']
+    keywords = ['Java', 'JavaScript', 'Typescript', 'C#', 'open source', 'github repo']
     
     users = search_users(keywords, num_users=100)
     

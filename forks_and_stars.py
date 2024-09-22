@@ -15,7 +15,7 @@ with open('config.json') as f:
 api_key = config['GITHUB_TOKEN']
 HEADERS = {"Authorization": f"token {api_key}"}
 LANGUAGES = ["java", "c#", "typescript", "javascript"]
-LOCAL_DB_FILE = 'new_github_repos.db'
+LOCAL_DB_FILE = 'github_repos.db'
 CSV_OUTPUT_FILE = f'{TIME_STAMP}_github_repos.csv'
 MAX_RETRIES = 5
 
@@ -45,76 +45,64 @@ def create_tables(cursor):
         );
     ''')
     
-# fetch repos:
-def fetch_repos(language, sort_by="stars", per_page=100, page=1):
-    retries = MAX_RETRIES
-    url = f"https://api.github.com/search/repositories?q=stars:>1+language:{language}&sort={sort_by}&order=desc&per_page={per_page}&page={page}"
+    
+def api_call_and_retry(url, headers, max_retries=MAX_RETRIES):
+    retries = max_retries
+    rate_limit_retries = 0    
     
     while retries > 0:
         try:
-            response = requests.get(url, headers=HEADERS)
+            response = requests.get(url, headers=headers)
             
-            if response.status_code == 403 and 'X-RateLimit-Reset' in response.headers:
-                reset_time = int(response.headers['X-RateLimit-Reset'])
-                sleep_time = max(reset_time - time.time(), 0)
-                print(f'rate limited, bro. sleeping it off for {sleep_time / 60:.2f} minutes')
-                time.sleep(sleep_time + 5)
-                continue
-            
-            if response.status_code == 200:
-                return response.json().get('items', [])
-            
-            print(f' error {response.status_code}: {response.text}')
+            if response.status_code == 403:
+                if 'X-RateLimit-Reset' in response.headers:
+                    reset_time = int(response.headers['X-RateLimit-Reset'])
+                    current_time = int(time.time())
+                    sleep_time = max((reset_time -  current_time), 0)
+                    if sleep_time > 0:
+                        sleep_minutes = sleep_time / 60
+                        print(f'rate limited, bro. sleeping it off for {sleep_minutes:.2f} minutes')
+                        time.sleep(sleep_time)
+                        continue
+                else:
+                    print('403 forbidden received without rate limit info. retrying with backoff.')
+                    if retries > 0:
+                        backoff = 2 ** (max_retries - retries) 
+                        print(f'Retrying in {backoff} seconds... ({retries} retries left)')
+                        time.sleep(backoff)
+                    continue
+                
+            elif response.status_code == 200:
+                return response.json()
+            else:
+                print(f'error: {response.status_code}: {response.text}')
         except requests.exceptions.RequestException as e:
             print(f'request failure: {e}')
-            
         retries -= 1
         if retries > 0:
-            time.sleep(2)
-
-    print('repo retry limit reached, likely error/issue')
-    return []
+            backoff = 2 ** (max_retries - retries)     
+            print(f'Retrying in {backoff} seconds... ({retries} retries left)')
+            time.sleep(backoff)
+            
+           
+    print('all retries have been tried. script exit.')
+    return None
+    
+    
+    
+# fetch repos:
+def fetch_repos(language, sort_by="stars", per_page=100, page=1):
+    url = f"https://api.github.com/search/repositories?q=stars:>1+language:{language}&sort={sort_by}&order=desc&per_page={per_page}&page={page}"
+    response = api_call_and_retry(url, HEADERS)
+    return response.get('items', []) if response else []
 
 
 # fetch contributors for a repo:
 def fetch_contributors(owner, repo, limit):
-    retries = MAX_RETRIES
     url = f"https://api.github.com/repos/{owner}/{repo}/contributors?per_page={limit}"
-    rate_limit_retries = 0
-    while retries > 0:
-        try:            
-            response = requests.get(url, headers=HEADERS)
+    response = api_call_and_retry(url, HEADERS)
+    return response[:limit] if response else []
             
-            if response.status_code == 403 and 'X-RateLimit-Reset' in response.headers:
-                rate_limit_retries += 1
-                if rate_limit_retries > MAX_RETRIES:
-                    print("max rate limit retries reached. exiting.")
-                    return []
-                reset_time = int(response.headers['X-RateLimit-Reset'])
-                sleep_time = max(reset_time - time.time(), 0)
-                print(f'  rate limited, bro. sleeping it off for {sleep_time / 60:.2f}  minutes')
-                time.sleep(sleep_time + 5)
-                continue
-            
-            if response.status_code == 200:
-                contributors = response.json()[:limit]
-                return contributors
-            
-            
-            print(f'error: {response.status_code}: {response.text}') 
-            retries -= 1
-            if retries > 0:
-                print(f"retrying... {retries} retries left") 
-                time.sleep(2)
-                
-        except requests.exceptions.RequestException as e:
-            print(f'request failure: {e}')
-            retries -= 1
-            if retries > 0:
-                print(f'retrying ...{retries} retries left')
-                time.sleep(2)
-
-    print("contributor retry limit reached")
 
 
 # insert repositories into db
@@ -149,6 +137,9 @@ def fetch_and_store_repos_by_criteria(cursor, language, sort_by, num_repos=NUM_R
             per_page=per_page, 
             page=page)
         
+        if not repos:
+            break
+        
         for repo in repos:
             insert_repo(cursor, repo)
             print(f"inserted repo: {repo['name']}")
@@ -163,7 +154,7 @@ def fetch_and_store_repos_by_criteria(cursor, language, sort_by, num_repos=NUM_R
 def export_to_csv(cursor, filename):
     cursor.execute("SELECT * FROM repositories")
     repos = cursor.fetchall()
-    with open(filename, 'w', newline='') as csvfile:
+    with open(filename, 'a', newline='') as csvfile:
         csv_writer = csv.writer(csvfile)
         csv_writer.writerow([i[0] for i in cursor.description])
         csv_writer.writerows(repos)
@@ -177,7 +168,6 @@ def main():
     cursor = conn.cursor()
     
 
-    
     try:
         create_tables(cursor)
         conn.commit()
