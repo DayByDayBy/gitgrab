@@ -23,33 +23,53 @@ MAX_RETRIES = 5
 # create tables (if they don't exist)
 def create_tables(cursor):
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS repositories (
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        url TEXT,
-        stars INTEGER,
-        forks INTEGER,
-        language TEXT,
-        owner TEXT,
-        created_at TEXT,
-        updated_at TEXT
+            CREATE TABLE IF NOT EXISTS repositories (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            url TEXT,
+            stars INTEGER,
+            forks INTEGER,
+            language TEXT,
+            owner TEXT,
+            created_at TEXT,
+            updated_at TEXT
         );
-    ''')
+        ''')
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS contributors (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        repo_id INTEGER,
-        contributor TEXT,
-        contributions INTEGER,
-        FOREIGN KEY (repo_id) REFERENCES repositories (id)
+            CREATE TABLE IF NOT EXISTS contributors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER,
+            contributor TEXT,
+            contributions INTEGER,
+            FOREIGN KEY (repo_id) REFERENCES repositories (id)
         );
-    ''')
+        ''')
+    cursor.execute('''
+            CREATE TABLE IF NOT EXISTS processed_repos (
+            id INTEGER PRIMARY KEY,
+            language TEXT,
+            sort_by TEXT
+            );
+        ''')
+
+def insert_processed_repo(cursor, repo_id, language, sort_by):
+    cursor.execute('''
+                INSERT OR REPLACE INTO processed_repos (id, language, sort_by)
+                VALUES (?,?,?)
+            ''', (repo_id, language, sort_by))    
+    
+def get_processed_repos(cursor, language, sort_by):
+    cursor.execute('''
+                SELECT id FROM processed_repos
+                WHERE language = ? AND sort_by = ?
+            ''', (language, sort_by))
+    return set(row[0] for row in cursor.fetchall())
+    
     
     
 def api_call_and_retry(url, headers, max_retries=MAX_RETRIES):
-    retries = max_retries
-    rate_limit_retries = 0    
     
+    retries = max_retries
     while retries > 0:
         try:
             response = requests.get(url, headers=headers)
@@ -66,18 +86,19 @@ def api_call_and_retry(url, headers, max_retries=MAX_RETRIES):
                         continue
                 else:
                     print('403 forbidden received without rate limit info. retrying with backoff.')
-                    if retries > 0:
-                        backoff = 2 ** (max_retries - retries) 
-                        print(f'Retrying in {backoff} seconds... ({retries} retries left)')
-                        time.sleep(backoff)
+                    backoff = 2 ** (max_retries - retries) 
+                    print(f'Retrying in {backoff} seconds... ({retries} retries left)')
+                    time.sleep(backoff)
+                    retries -= 1
                     continue
-                
             elif response.status_code == 200:
                 return response.json()
             else:
                 print(f'error: {response.status_code}: {response.text}')
+                
         except requests.exceptions.RequestException as e:
             print(f'request failure: {e}')
+            
         retries -= 1
         if retries > 0:
             backoff = 2 ** (max_retries - retries)     
@@ -85,7 +106,7 @@ def api_call_and_retry(url, headers, max_retries=MAX_RETRIES):
             time.sleep(backoff)
             
            
-    print('all retries have been tried. script exit.')
+    print('retries exhausted. script exit.')
     return None
     
     
@@ -103,7 +124,6 @@ def fetch_contributors(owner, repo, limit):
     response = api_call_and_retry(url, HEADERS)
     return response[:limit] if response else []
             
-
 
 # insert repositories into db
 def insert_repo(cursor, repo_data):
@@ -129,6 +149,7 @@ def insert_contributors(cursor, repo_id, contributors):
 def fetch_and_store_repos_by_criteria(cursor, language, sort_by, num_repos=NUM_REPOS):
     per_page = 30
     pages = (num_repos // per_page) + 1
+    processed_repos = get_processed_repos(cursor, language, sort_by)
     
     for page in range(1, pages+1):
         repos = fetch_repos(
@@ -141,16 +162,28 @@ def fetch_and_store_repos_by_criteria(cursor, language, sort_by, num_repos=NUM_R
             break
         
         for repo in repos:
-            insert_repo(cursor, repo)
-            print(f"inserted repo: {repo['name']}")
+            if repo['id'] in processed_repos:
+                print(f"skipping prev inserted repo: {repo['name']}")
+                continue
             
-            # fetch/insert contributors:
-            contributors = fetch_contributors(repo['owner']['login'], repo['name'], NUM_CONTRIBUTORS)
-            if contributors:
-                insert_contributors(cursor, repo['id'], contributors)
-                print(f"inserted contributors for: {repo['name']}")
+            try:
+                insert_repo(cursor, repo)
+                print(f"inserted repo: {repo['name']}")       
+                     
+                contributors = fetch_contributors(repo['owner']['login'], repo['name'], NUM_CONTRIBUTORS)
+                if contributors:
+                    insert_contributors(cursor, repo['id'], contributors)
+                    print(f"inserted contributors for: {repo['name']}")
+                insert_processed_repo(cursor, repo['id'], language, sort_by)
+                cursor.connection.commit()
+            
+            except Exception as e:
+                print(f"error processing repo {repo['name']}: {e}")
+                cursor.connection.rollback()  
+                continue
                 
-
+                
+# CSV save                
 def export_to_csv(cursor, filename):
     cursor.execute("SELECT * FROM repositories")
     repos = cursor.fetchall()
@@ -161,38 +194,30 @@ def export_to_csv(cursor, filename):
     
 
 # the bit that does the thing:
-
 def main():
     
     conn = sqlite3.connect(LOCAL_DB_FILE)
     cursor = conn.cursor()
-    
-
+ 
     try:
         create_tables(cursor)
         conn.commit()
 
         for language in LANGUAGES:
-                print(f'grabbing forky repos with {language}...')
-                fetch_and_store_repos_by_criteria(cursor, language, "forks", num_repos= NUM_REPOS)
-                conn.commit()
-                print(f'grabbing starry repos with {language}...')
-                fetch_and_store_repos_by_criteria(cursor, language, "stars", num_repos= NUM_REPOS)
-                conn.commit()
+            for sort_by in ["forks", "stars"]:
+            
+                print(f'grabbing high {sort_by} repos with {language}...')
+                fetch_and_store_repos_by_criteria(cursor, language, sort_by, num_repos= NUM_REPOS)
+        
         export_to_csv(cursor, CSV_OUTPUT_FILE)
         print(f'CSV exported to {CSV_OUTPUT_FILE}')
         
     except Exception as e:
         print(f'error: {e}')
         conn.rollback()
-    else:
-        conn.commit()
     finally:
         cursor.close()
         conn.close()
-                
-
-            
             
 if __name__ == "__main__":
     main()
