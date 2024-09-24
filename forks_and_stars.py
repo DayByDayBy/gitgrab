@@ -14,11 +14,10 @@ with open('config.json') as f:
     config = json.load(f)
 api_key = config['GITHUB_TOKEN']
 HEADERS = {"Authorization": f"token {api_key}"}
-LANGUAGES = ["java", "c#", "typescript", "javascript"]
+LANGUAGES = ["typescript", "javascript", "java", "c#"]
 LOCAL_DB_FILE = 'github_repos.db'
 CSV_OUTPUT_FILE = f'{TIME_STAMP}_github_repos.csv'
 MAX_RETRIES = 5
-
 
 # create tables (if they don't exist)
 def create_tables(cursor):
@@ -69,10 +68,12 @@ def get_processed_repos(cursor, language, sort_by):
     
 def api_call_and_retry(url, headers, max_retries=MAX_RETRIES):
     
-    retries = max_retries
-    while retries > 0:
+    for attempt in range(max_retries):
         try:
             response = requests.get(url, headers=headers)
+            
+            if response.status_code == 200:
+                return response.json()
             
             if response.status_code == 403:
                 if 'X-RateLimit-Reset' in response.headers:
@@ -86,24 +87,20 @@ def api_call_and_retry(url, headers, max_retries=MAX_RETRIES):
                         continue
                 else:
                     print('403 forbidden received without rate limit info. retrying with backoff.')
-                    backoff = 2 ** (max_retries - retries) 
-                    print(f'Retrying in {backoff} seconds... ({retries} retries left)')
-                    time.sleep(backoff)
-                    retries -= 1
-                    continue
-            elif response.status_code == 200:
-                return response.json()
-            else:
-                print(f'error: {response.status_code}: {response.text}')
-                
+                    
+            print(f'Error: {response.status_code}: {response.text}')
+            
         except requests.exceptions.RequestException as e:
             print(f'request failure: {e}')
             
-        retries -= 1
-        if retries > 0:
-            backoff = 2 ** (max_retries - retries)     
-            print(f'Retrying in {backoff} seconds... ({retries} retries left)')
-            time.sleep(backoff)
+            
+            
+            
+
+        backoff = 2 ** (max_retries - attempt)
+        retries_left = max_retries - (attempt + 1)
+        print(f'Retrying in {backoff} seconds... ({retries_left} retries left)')
+        time.sleep(backoff)
             
            
     print('retries exhausted. script exit.')
@@ -147,11 +144,12 @@ def insert_contributors(cursor, repo_id, contributors):
 
 # grabbing starred/forked repos:
 def fetch_and_store_repos_by_criteria(cursor, language, sort_by, num_repos=NUM_REPOS):
-    per_page = 30
-    pages = (num_repos // per_page) + 1
+    per_page = 100
+    collected_repos = 0
+    page = 1
     processed_repos = get_processed_repos(cursor, language, sort_by)
     
-    for page in range(1, pages+1):
+    while collected_repos < num_repos:
         repos = fetch_repos(
             language,
             sort_by=sort_by, 
@@ -159,6 +157,8 @@ def fetch_and_store_repos_by_criteria(cursor, language, sort_by, num_repos=NUM_R
             page=page)
         
         if not repos:
+            print("no more repos")
+
             break
         
         for repo in repos:
@@ -180,8 +180,8 @@ def fetch_and_store_repos_by_criteria(cursor, language, sort_by, num_repos=NUM_R
             except Exception as e:
                 print(f"error processing repo {repo['name']}: {e}")
                 cursor.connection.rollback()  
-                continue
-                
+                continue                
+        page += 1
                 
 # CSV save                
 def export_to_csv(cursor, filename):
@@ -212,12 +212,17 @@ def main():
         export_to_csv(cursor, CSV_OUTPUT_FILE)
         print(f'CSV exported to {CSV_OUTPUT_FILE}')
         
+    except KeyboardInterrupt:
+        print('\n keyboard interruption, stopping')
+        export_to_csv(cursor, CSV_OUTPUT_FILE)    
+        conn.rollback()
     except Exception as e:
         print(f'error: {e}')
         conn.rollback()
     finally:
         cursor.close()
         conn.close()
+        print('db connection closed')
             
 if __name__ == "__main__":
     main()
