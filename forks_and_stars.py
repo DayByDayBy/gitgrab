@@ -8,13 +8,13 @@ import os
 
 TIME_STAMP = datetime.now().strftime("%Y%m%d_%H%M")
 
-NUM_REPOS = 200
-NUM_CONTRIBUTORS = 5 
+NUM_REPOS = 100
+NUM_CONTRIBUTORS = 5
 with open('config.json') as f:
     config = json.load(f)
 api_key = config['GITHUB_TOKEN']
 HEADERS = {"Authorization": f"token {api_key}"}
-LANGUAGES = ["typescript", "javascript", "java", "c#"]
+LANGUAGES = [ "javascript", "typescript" , "c#", "java"]
 LOCAL_DB_FILE = 'github_repos.db'
 CSV_OUTPUT_FILE = f'{TIME_STAMP}_github_repos.csv'
 MAX_RETRIES = 5
@@ -67,9 +67,10 @@ def get_processed_repos(cursor, language, sort_by):
     
     
 def api_call_and_retry(url, headers, max_retries=MAX_RETRIES):
-    
-    for attempt in range(max_retries):
-        try:
+
+    try:
+        for attempt in range(max_retries):
+            
             response = requests.get(url, headers=headers)
             
             if response.status_code == 200:
@@ -90,8 +91,8 @@ def api_call_and_retry(url, headers, max_retries=MAX_RETRIES):
                     
             print(f'Error: {response.status_code}: {response.text}')
             
-        except requests.exceptions.RequestException as e:
-            print(f'request failure: {e}')
+    except requests.exceptions.RequestException as e:
+        print(f'request failure: {e}')
             
             
             
