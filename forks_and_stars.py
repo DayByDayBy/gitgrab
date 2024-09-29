@@ -8,13 +8,13 @@ import os
 
 TIME_STAMP = datetime.now().strftime("%Y%m%d_%H%M")
 
-NUM_REPOS = 100
+NUM_REPOS = 50
 NUM_CONTRIBUTORS = 5
 with open('config.json') as f:
     config = json.load(f)
 api_key = config['GITHUB_TOKEN']
 HEADERS = {"Authorization": f"token {api_key}"}
-LANGUAGES = [ "javascript", "typescript" , "c#", "java"]
+LANGUAGES = [ "typescript" , "golang", "cobol"]
 LOCAL_DB_FILE = 'github_repos.db'
 CSV_OUTPUT_FILE = f'{TIME_STAMP}_github_repos.csv'
 MAX_RETRIES = 5
@@ -93,9 +93,6 @@ def api_call_and_retry(url, headers, max_retries=MAX_RETRIES):
             
     except requests.exceptions.RequestException as e:
         print(f'request failure: {e}')
-            
-            
-            
             
 
         backoff = 2 ** (max_retries - attempt)
