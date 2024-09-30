@@ -14,7 +14,7 @@ with open('config.json') as f:
     config = json.load(f)
 api_key = config['GITHUB_TOKEN']
 HEADERS = {"Authorization": f"token {api_key}"}
-LANGUAGES = ["PHP", "C#"]
+LANGUAGES = ["C++", "C#", "C"]
 LOCAL_DB_FILE = 'github_repos.db'
 CSV_OUTPUT_FILE = f'{TIME_STAMP}_github_repos.csv'
 MAX_RETRIES = 5
